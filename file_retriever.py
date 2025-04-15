@@ -11,6 +11,7 @@ import mplcursors
 import creds
 
 def clean_and_lowercase(text):
+    text = text.replace('"', '')
     cleaned_text = re.sub(r'\s+', ' ', text)
     return cleaned_text.strip()
 
@@ -18,6 +19,14 @@ def clean_and_lowercase(text):
 def create_csv(ticker, start_date, end_date, limit):
     api = APIClient(creds.api_key)
     resp = api.financial_news(ticker, from_date = start_date, to_date = end_date, limit = limit)  # Get financial news for TIKR
+    if not resp:
+        print(f"No data in API response for {start_date} to {end_date}")
+        return pd.DataFrame()
+
+        # Before processing, optionally check one record (if available) for the content key.
+    if 'content' not in resp[0]:
+        print(f"'content' key missing in API response for {start_date} to {end_date}")
+        return pd.DataFrame()
     i = len(resp)
     has = 0
     doesnt_have = 0
@@ -35,7 +44,11 @@ def create_csv(ticker, start_date, end_date, limit):
         has = 0
         doesnt_have = 0
     df = pd.DataFrame(resp)
-    df['content'] = df['content'].apply(clean_and_lowercase)
+    if 'content' in df.columns:
+        df['content'] = df['content'].apply(clean_and_lowercase)
+    else:
+        print(f"'content' column missing in DataFrame for {start_date} to {end_date}.")
+        return pd.DataFrame()
     return df
 
 
@@ -43,8 +56,8 @@ def create_csv(ticker, start_date, end_date, limit):
 
 def create_complete_csv(ticker):
 
-    start_date = pd.Timestamp('2025-3-15', tz = 'UTC')
-    end_date = pd.Timestamp('2025-04-09', tz = 'UTC')
+    start_date = pd.Timestamp('2025-03-01', tz = 'UTC')
+    end_date = pd.Timestamp('2025-04-15', tz = 'UTC')
     resp = pd.DataFrame()
     current_date = end_date
     while current_date >= start_date:
@@ -53,7 +66,14 @@ def create_complete_csv(ticker):
         end_str = current_date.strftime('%Y-%m-%d')
 
         temp_df = create_csv(ticker, start_str, end_str, 1000)
+
+        if temp_df.empty:
+            print(f"No data returned for the period {start_str} to {end_str}. Skipping this week.")
+            current_date = current_date - pd.Timedelta(weeks = 1)
+            continue
+
         resp = pd.concat([resp, temp_df])
+
         current_date = current_date - pd.Timedelta(weeks = 1)
     columns_to_drop = ['title', 'link', 'symbols', 'tags', 'sentiment']
     df = resp.drop(columns = columns_to_drop)
@@ -89,8 +109,8 @@ def buy_or_sell(csv_file, week_increment):
     sentiment_df['date'] = pd.to_datetime(sentiment_df['date'])
     sentiment_df = sentiment_df.set_index('date')
 
-    start_date = pd.Timestamp('2025-03-15', tz = 'UTC')
-    end_date = pd.Timestamp('2025-04-09', tz = 'UTC')
+    start_date = pd.Timestamp('2021-03-01', tz = 'UTC')
+    end_date = pd.Timestamp('2025-04-15', tz = 'UTC')
 
     current_date = start_date
 
@@ -160,9 +180,9 @@ def plot_all_data(df1, df2):
 
 
     color_map = {'BUY': 'green',
-                 'STRONG BUY': 'turquoise',
+                 'STRONG BUY': 'green',
                  'SELL': 'red',
-                 'STRONG SELL': 'yellow',
+                 'STRONG SELL': 'red',
                  'NEUTRAL': 'grey'}
 
 
@@ -237,25 +257,98 @@ def backtest_dca_multiplier(signal_csv_file, ticker, investment_per_period = 100
     print("Total return percentage with modified DCA: %" + str((((((modified_DCA_shares_accumulated * final_price) + modified_DCA_bank) / modified_DCA_total_invested) - 1) * 100)))
 
 
+def backtest_sell_strategy_lists(tickers_list, price_csv_list, signal_data_list, initial_investment=100):
+    # Ensure all lists are of equal length.
+    if not (len(tickers_list) == len(price_csv_list) == len(signal_data_list)):
+        raise ValueError("All input lists (tickers_list, price_csv_list, signal_data_list) must have the same length.")
 
+    results = {}
 
+    # Process each stock one by one.
+    for i in range(len(tickers_list)):
+        ticker = tickers_list[i]
+        price_file = price_csv_list[i]
+        df_signals = signal_data_list[i].copy()
 
+        # Load the price CSV with Date parsing.
+        try:
+            df_prices = pd.read_csv(price_file, parse_dates = ['Date'])
+        except Exception as e:
+            print(f"Error loading price data for {ticker}: {e}")
+            continue
 
+        # Remove timezone info (if any) to make dates comparable.
+        df_prices['Date'] = pd.to_datetime(df_prices['Date']).dt.tz_localize(None)
+        df_signals['Date'] = pd.to_datetime(df_signals['Date']).dt.tz_localize(None)
 
+        # Sort the price data chronologically.
+        df_prices.sort_values('Date', inplace = True)
 
+        # Filter signals for SELL and STRONG SELL.
+        invest_dates = df_signals[df_signals['Signal'].isin(["SELL", "STRONG SELL"])]["Date"]
 
+        total_invested = 0.0
+        total_final_value = 0.0
 
+        # Process each invest date.
+        for invest_date in invest_dates:
+            # Look for the price on the invest date.
+            price_row = df_prices[df_prices['Date'] == invest_date]
+            # If no exact match, use the last available price before the invest_date.
+            if price_row.empty:
+                price_row = df_prices[df_prices['Date'] < invest_date].tail(1)
+            if price_row.empty:
+                # If there's no historical data prior to the signal, skip.
+                continue
 
+            price_at_investment = price_row['Adjusted_close'].iloc[0]
+            shares = initial_investment / price_at_investment  # Number of shares bought
 
+            # Use the final available price from the CSV.
+            final_price = df_prices['Adjusted_close'].iloc[-1]
+            final_value = shares * final_price
 
+            total_invested += initial_investment
+            total_final_value += final_value
 
+        # Calculate individual percentage return.
+        percentage_return = ((total_final_value / total_invested - 1) * 100) if total_invested else None
 
+        results[ticker] = {
+            "total_invested": total_invested,
+            "final_value": total_final_value,
+            "percentage_return": percentage_return
+        }
 
+    # Aggregate overall results.
+    overall_invested = sum(stock_data["total_invested"] for stock_data in results.values())
+    overall_final_value = sum(stock_data["final_value"] for stock_data in results.values())
+    overall_percentage_return = ((overall_final_value / overall_invested - 1) * 100) if overall_invested else None
 
+    # ----- Plotting -----
+    # Plot individual stock percentage returns.
+    tickers = list(results.keys())
+    returns = [results[ticker]["percentage_return"] if results[ticker]["percentage_return"] is not None else 0 for
+               ticker in tickers]
 
+    plt.figure(figsize=(10, 6))
+    plt.bar(tickers, returns, color='blue')
+    plt.axhline(0, color='black', linewidth=0.8)
+    plt.xlabel('Stock Ticker')
+    plt.ylabel('Percentage Return (%)')
+    plt.title('Backtest: Percentage Return per Stock')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
 
+    # Plot overall totals: invested vs. final portfolio value.
+    plt.figure(figsize=(8, 6))
+    labels = ["Total Invested", "Final Portfolio Value"]
+    values = [overall_invested, overall_final_value]
+    plt.bar(labels, values, color=['blue', 'green'])
+    plt.ylabel('USD')
+    plt.title('Overall Investment vs. Final Portfolio Value')
+    plt.tight_layout()
+    plt.show()
 
-
-
-
-
+    return results, overall_percentage_return, overall_invested, overall_final_value
