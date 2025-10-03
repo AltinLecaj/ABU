@@ -134,16 +134,3 @@ The system generates CSV files in the format `{TICKER}_data1.csv` containing:
 - Weekly data aggregation reduces API calls and processing time
 - News filtering removes articles with mixed ticker focus to improve signal quality
 
-## License
-
-MIT License
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
-
-## Acknowledgments
-
-- EODHD for financial data API
-- Hugging Face for the sentiment analysis model
-- The transformers library team
