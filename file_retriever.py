@@ -162,8 +162,9 @@ def buy_or_sell(csv_file, week_increment):
 
 def get_eod_prices(SYMBOL_NAME, period_day_week_month):
 
-    url = f'https://eodhd.com/api/eod/' + SYMBOL_NAME + '.US?from=2021-03-01&to=2025-04-02&period=' + period_day_week_month + '&api_token=67e12d8f64f5d6.71424304&fmt=csv'
-    df = pd.read_csv(url)
+    url = (f'https://eodhd.com/api/eod/{SYMBOL_NAME}.US'
+       f'?from=2021-03-01&to=2025-04-02&period={period_day_week_month}'
+       f'&api_token={creds.api_key}&fmt=csv')    df = pd.read_csv(url)
     columns_to_drop = ['Open', 'High', 'Low', 'Close', 'Volume']
     df.drop(columns = columns_to_drop, inplace = True)
     df['Date'] = pd.to_datetime(df['Date'])
